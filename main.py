@@ -2,9 +2,17 @@ import cv2
 from pathlib import Path
 import numpy as np
 
+video_path = "Data/rotate.mjpeg"
+
 
 class VideMosaic:
-    def __init__(self, first_image, output_height_times=2, output_width_times=4, detector_type="sift"):
+    def __init__(
+        self,
+        first_image,
+        output_height_times=2,
+        output_width_times=4,
+        detector_type="sift",
+    ):
         """This class processes every frame and generates the panorama
 
         Args:
@@ -25,15 +33,23 @@ class VideMosaic:
 
         self.process_first_frame(first_image)
 
-        self.output_img = np.zeros(shape=(int(output_height_times * first_image.shape[0]), int(
-            output_width_times*first_image.shape[1]), first_image.shape[2]))
+        self.output_img = np.zeros(
+            shape=(
+                int(output_height_times * first_image.shape[0]),
+                int(output_width_times * first_image.shape[1]),
+                first_image.shape[2],
+            )
+        )
 
         # offset
-        self.w_offset = int(self.output_img.shape[0]/2 - first_image.shape[0]/2)
-        self.h_offset = int(self.output_img.shape[1]/2 - first_image.shape[1]/2)
+        self.w_offset = int(self.output_img.shape[0] / 2 - first_image.shape[0] / 2)
+        self.h_offset = int(self.output_img.shape[1] / 2 - first_image.shape[1] / 2)
 
-        self.output_img[self.w_offset:self.w_offset+first_image.shape[0],
-                        self.h_offset:self.h_offset+first_image.shape[1], :] = first_image
+        self.output_img[
+            self.w_offset : self.w_offset + first_image.shape[0],
+            self.h_offset : self.h_offset + first_image.shape[1],
+            :,
+        ] = first_image
 
         self.H_old = np.eye(3)
         self.H_old[0, 2] = self.h_offset
@@ -47,7 +63,9 @@ class VideMosaic:
         """
         self.frame_prev = first_image
         frame_gray_prev = cv2.cvtColor(first_image, cv2.COLOR_BGR2GRAY)
-        self.kp_prev, self.des_prev = self.detector.detectAndCompute(frame_gray_prev, None)
+        self.kp_prev, self.des_prev = self.detector.detectAndCompute(
+            frame_gray_prev, None
+        )
 
     def match(self, des_cur, des_prev):
         """matches the descriptors
@@ -64,7 +82,7 @@ class VideMosaic:
             pair_matches = self.bf.knnMatch(des_cur, des_prev, k=2)
             matches = []
             for m, n in pair_matches:
-                if m.distance < 0.7*n.distance:
+                if m.distance < 0.7 * n.distance:
                     matches.append(m)
 
         elif self.detector_type == "orb":
@@ -74,12 +92,19 @@ class VideMosaic:
         matches = sorted(matches, key=lambda x: x.distance)
 
         # get the maximum of 20  best matches
-        matches = matches[:min(len(matches), 20)]
+        matches = matches[: min(len(matches), 20)]
         # Draw first 10 matches.
         if self.visualize:
-            match_img = cv2.drawMatches(self.frame_cur, self.kp_cur, self.frame_prev, self.kp_prev, matches, None,
-                                        flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-            cv2.imshow('matches', match_img)
+            match_img = cv2.drawMatches(
+                self.frame_cur,
+                self.kp_cur,
+                self.frame_prev,
+                self.kp_prev,
+                matches,
+                None,
+                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            )
+            cv2.imshow("matches", match_img)
         return matches
 
     def process_frame(self, frame_cur):
@@ -109,7 +134,7 @@ class VideMosaic:
         self.des_prev = self.des_cur
         self.frame_prev = self.frame_cur
 
-    @ staticmethod
+    @staticmethod
     def findHomography(image_1_kp, image_2_kp, matches):
         """gets two matches and calculate the homography between two images
 
@@ -130,12 +155,13 @@ class VideMosaic:
             image_2_points[i] = image_2_kp[matches[i].trainIdx].pt
 
         homography, mask = cv2.findHomography(
-            image_1_points, image_2_points, cv2.RANSAC, ransacReprojThreshold=2.0)
+            image_1_points, image_2_points, cv2.RANSAC, ransacReprojThreshold=2.0
+        )
 
         return homography
 
     def warp(self, frame_cur, H):
-        """ warps the current frame based of calculated homography H
+        """warps the current frame based of calculated homography H
 
         Args:
             frame_cur (np array): current frame
@@ -145,26 +171,32 @@ class VideMosaic:
             np array: image output of mosaicing
         """
         warped_img = cv2.warpPerspective(
-            frame_cur, H, (self.output_img.shape[1], self.output_img.shape[0]), flags=cv2.INTER_LINEAR)
+            frame_cur,
+            H,
+            (self.output_img.shape[1], self.output_img.shape[0]),
+            flags=cv2.INTER_LINEAR,
+        )
 
         transformed_corners = self.get_transformed_corners(frame_cur, H)
         warped_img = self.draw_border(warped_img, transformed_corners)
 
         self.output_img[warped_img > 0] = warped_img[warped_img > 0]
         output_temp = np.copy(self.output_img)
-        output_temp = self.draw_border(output_temp, transformed_corners, color=(0, 0, 255))
+        output_temp = self.draw_border(
+            output_temp, transformed_corners, color=(0, 0, 255)
+        )
 
-        cv2.imshow('output',  output_temp/255.)
+        cv2.imshow("output", output_temp / 255.0)
 
         return self.output_img
 
-    @ staticmethod
+    @staticmethod
     def get_transformed_corners(frame_cur, H):
         """finds the corner of the current frame after warp
 
         Args:
             frame_cur (np array): current frame
-            H (np array of shape [3,3]): Homography matrix 
+            H (np array of shape [3,3]): Homography matrix
 
         Returns:
             [np array]: a list of 4 corner points after warping
@@ -195,15 +227,18 @@ class VideMosaic:
         Returns:
             np array: the output image with border
         """
-        for i in range(corners.shape[1]-1, -1, -1):
-            cv2.line(image, tuple(corners[0, i, :]), tuple(
-                corners[0, i-1, :]), thickness=5, color=color)
+        for i in range(corners.shape[1] - 1, -1, -1):
+            cv2.line(
+                image,
+                tuple(corners[0, i, :]),
+                tuple(corners[0, i - 1, :]),
+                thickness=5,
+                color=color,
+            )
         return image
 
 
 def main():
-
-    video_path = 'Data/rotate.mjpeg'
     cap = cv2.VideoCapture(video_path)
     is_first_frame = True
     cap.read()
@@ -221,12 +256,12 @@ def main():
 
         # process each frame
         video_mosaic.process_frame(frame_cur)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
     cv2.waitKey(0)
     cap.release()
     cv2.destroyAllWindows()
-    cv2.imwrite('mosaic.jpg', video_mosaic.output_img)
+    cv2.imwrite("mosaic.jpg", video_mosaic.output_img)
 
 
 if __name__ == "__main__":
