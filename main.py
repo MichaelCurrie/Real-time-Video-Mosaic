@@ -4,11 +4,12 @@ import numpy as np
 import subprocess
 
 MOSAIC_PATH = "mosaic.jpg"
-SRC_PATH = Path("Data") / "my-own.mp4"
-VIDEO_WIDTH = 640
-NUM_FRAMES = 100
-SKIP_FRAMES = 5
-START_FRAME = 0
+# SRC_PATH = Path("Data") / "my-own.mp4"
+SRC_PATH = Path("Data") / "ttk.mp4"
+VIDEO_WIDTH = 1280
+NUM_FRAMES = 200
+SKIP_FRAMES = 1
+START_FRAME = 200
 
 
 def mp4_to_mjpeg(
@@ -43,6 +44,7 @@ def mp4_to_mjpeg(
 
     ffmpeg_command = [
         "ffmpeg",
+        "-y",
         "-i",
         str(src_path),
         "-vf",
@@ -74,13 +76,18 @@ class VideoMosaic:
         output_width_times=4,
         detector_type="sift",
     ):
-        """This class processes every frame and generates the panorama
+        """
+        Initializes the mosaic creation. The first frame is used to set up
+        the panorama output image size and the feature detector.
+
+        This class processes every frame and generates the panorama
 
         Args:
             first_image (image for the first frame): first image to initialize the output size
             output_height_times (int, optional): determines the output height based on input image height. Defaults to 2.
             output_width_times (int, optional): determines the output width based on input image width. Defaults to 4.
             detector_type (str, optional): the detector for feature detection. It can be "sift" or "orb". Defaults to "sift".
+
         """
         self.detector_type = detector_type
         if detector_type == "sift":
@@ -90,6 +97,7 @@ class VideoMosaic:
             self.detector = cv2.ORB_create(700)
             self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
 
+        # Enable visualization for debugging.
         self.visualize = True
 
         self.process_first_frame(first_image)
@@ -99,10 +107,11 @@ class VideoMosaic:
                 int(output_height_times * first_image.shape[0]),
                 int(output_width_times * first_image.shape[1]),
                 first_image.shape[2],
-            )
+            ),
+            dtype=first_image.dtype,
         )
 
-        # offset
+        # offset: center the initial frame.
         self.w_offset = int(self.output_img.shape[0] / 2 - first_image.shape[0] / 2)
         self.h_offset = int(self.output_img.shape[1] / 2 - first_image.shape[1] / 2)
 
@@ -116,9 +125,14 @@ class VideoMosaic:
         self.H_old[0, 2] = self.h_offset
         self.H_old[1, 2] = self.w_offset
 
-    def process_first_frame(self, first_image):
-        """processes the first frame for feature detection and description
+        # Make the match window resizable if visualization is on.
+        if self.visualize:
+            cv2.namedWindow("matches", cv2.WINDOW_NORMAL)
+            # Optionally, resize the matches window as desired.
+            cv2.resizeWindow("matches", 640, 480)
 
+    def process_first_frame(self, first_image):
+        """Processes the first frame for feature detection and description.
         Args:
             first_image (cv2 image/np array): first image for feature detection
         """
@@ -129,7 +143,7 @@ class VideoMosaic:
         )
 
     def match(self, des_cur, des_prev):
-        """matches the descriptors
+        """Matches the descriptors between the current and previous frames.
 
         Args:
             des_cur (np array): current frame descriptor
@@ -138,23 +152,15 @@ class VideoMosaic:
         Returns:
             array: and array of matches between descriptors
         """
-        # matching
+
         if self.detector_type == "sift":
             pair_matches = self.bf.knnMatch(des_cur, des_prev, k=2)
-            matches = []
-            for m, n in pair_matches:
-                if m.distance < 0.7 * n.distance:
-                    matches.append(m)
-
+            matches = [m for m, n in pair_matches if m.distance < 0.7 * n.distance]
         elif self.detector_type == "orb":
             matches = self.bf.match(des_cur, des_prev)
 
-        # Sort them in the order of their distance.
         matches = sorted(matches, key=lambda x: x.distance)
-
-        # get the maximum of 20  best matches
         matches = matches[: min(len(matches), 20)]
-        # Draw first 10 matches.
         if self.visualize:
             match_img = cv2.drawMatches(
                 self.frame_cur,
@@ -169,7 +175,7 @@ class VideoMosaic:
         return matches
 
     def process_frame(self, frame_cur):
-        """gets an image and processes that image for mosaicing
+        """Processes an incoming frame for the mosaic.
 
         Args:
             frame_cur (np array): input of current frame for the mosaicing
@@ -179,17 +185,13 @@ class VideoMosaic:
         self.kp_cur, self.des_cur = self.detector.detectAndCompute(frame_gray_cur, None)
 
         self.matches = self.match(self.des_cur, self.des_prev)
-
         if len(self.matches) < 4:
             return
 
         self.H = self.findHomography(self.kp_cur, self.kp_prev, self.matches)
         self.H = np.matmul(self.H_old, self.H)
-        # TODO: check for bad Homography
-
         self.warp(self.frame_cur, self.H)
 
-        # loop preparation
         self.H_old = self.H
         self.kp_prev = self.kp_cur
         self.des_prev = self.des_cur
@@ -197,7 +199,7 @@ class VideoMosaic:
 
     @staticmethod
     def findHomography(image_1_kp, image_2_kp, matches):
-        """gets two matches and calculate the homography between two images
+        """Calculates the homography between two frames given matching keypoints.
 
         Args:
             image_1_kp (np array): keypoints of image 1
@@ -206,23 +208,22 @@ class VideoMosaic:
 
         Returns:
             np arrat of shape [3,3]: Homography matrix
-        """
-        # taken from https://github.com/cmcguinness/focusstack/blob/master/FocusStack.py
 
+        Note: taken from https://github.com/cmcguinness/focusstack/blob/master/FocusStack.py
+
+        """
         image_1_points = np.zeros((len(matches), 1, 2), dtype=np.float32)
         image_2_points = np.zeros((len(matches), 1, 2), dtype=np.float32)
-        for i in range(0, len(matches)):
-            image_1_points[i] = image_1_kp[matches[i].queryIdx].pt
-            image_2_points[i] = image_2_kp[matches[i].trainIdx].pt
-
+        for i, match in enumerate(matches):
+            image_1_points[i] = image_1_kp[match.queryIdx].pt
+            image_2_points[i] = image_2_kp[match.trainIdx].pt
         homography, mask = cv2.findHomography(
             image_1_points, image_2_points, cv2.RANSAC, ransacReprojThreshold=2.0
         )
-
         return homography
 
     def warp(self, frame_cur, H):
-        """warps the current frame based of calculated homography H
+        """Warps the current frame based on the homography H and updates the mosaic.
 
         Args:
             frame_cur (np array): current frame
@@ -247,14 +248,13 @@ class VideoMosaic:
             output_temp, transformed_corners, color=(0, 0, 255)
         )
 
+        # Show the output mosaic in a resizable window.
         cv2.imshow("output", output_temp / 255.0)
-
         return self.output_img
 
     @staticmethod
     def get_transformed_corners(frame_cur, H):
-        """finds the corner of the current frame after warp
-
+        """Finds the corners of the input frame after applying the homography.
         Args:
             frame_cur (np array): current frame
             H (np array of shape [3,3]): Homography matrix
@@ -262,23 +262,22 @@ class VideoMosaic:
         Returns:
             [np array]: a list of 4 corner points after warping
         """
-        corner_0 = np.array([0, 0])
-        corner_1 = np.array([frame_cur.shape[1], 0])
-        corner_2 = np.array([frame_cur.shape[1], frame_cur.shape[0]])
-        corner_3 = np.array([0, frame_cur.shape[0]])
-
-        corners = np.array([[corner_0, corner_1, corner_2, corner_3]], dtype=np.float32)
+        corners = np.array(
+            [
+                [
+                    [0, 0],
+                    [frame_cur.shape[1], 0],
+                    [frame_cur.shape[1], frame_cur.shape[0]],
+                    [0, frame_cur.shape[0]],
+                ]
+            ],
+            dtype=np.float32,
+        )
         transformed_corners = cv2.perspectiveTransform(corners, H)
-
-        transformed_corners = np.array(transformed_corners, dtype=np.int32)
-        # mask = np.zeros(shape=(output.shape[0], output.shape[1], 1))
-        # cv2.fillPoly(mask, transformed_corners, color=(1, 0, 0))
-        # cv2.imshow('mask', mask)
-
-        return transformed_corners
+        return np.array(transformed_corners, dtype=np.int32)
 
     def draw_border(self, image, corners, color=(0, 0, 0)):
-        """This functions draw rectancle border
+        """Draws a rectangular border on the image using the given corner points.
 
         Args:
             image ([type]): current mosaiced output
@@ -299,28 +298,31 @@ class VideoMosaic:
         return image
 
 
-def create_mosaic(video_path, mosaic_path):
-    print("Creating mosaic... press 0 to quit and save.")
+def create_mosaic(video_path, mosaic_path, display_size=(640, 480)):
+    print("Creating mosaic... press 'q' to quit.")
     cap = cv2.VideoCapture(video_path)
+
+    # Create a resizable window for mosaic output.
+    cv2.namedWindow("output", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("output", display_size[0], display_size[1])
+
     is_first_frame = True
-    cap.read()
+    # Remove the initial cap.read() call so processing starts immediately.
     while cap.isOpened():
         ret, frame_cur = cap.read()
         if not ret:
-            if is_first_frame:
-                continue
             break
 
         if is_first_frame:
             video_mosaic = VideoMosaic(frame_cur, detector_type="sift")
             is_first_frame = False
+            # Continue immediately to process subsequent frames.
             continue
 
-        # process each frame
         video_mosaic.process_frame(frame_cur)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
-    cv2.waitKey(0)
+
     cap.release()
     cv2.destroyAllWindows()
     cv2.imwrite(mosaic_path, video_mosaic.output_img)
@@ -331,11 +333,14 @@ if __name__ == "__main__":
     dst_path = Path(SRC_PATH).parent / (Path(SRC_PATH).stem + ".mjpeg")
 
     mp4_to_mjpeg(
-        src_path=SRC_PATH,
-        dst_path=dst_path,
+        src_path=str(SRC_PATH),
+        dst_path=str(dst_path),
         video_width=VIDEO_WIDTH,
         num_frames=NUM_FRAMES,
         skip_frames=SKIP_FRAMES,
+        start_frame=START_FRAME,
     )
 
-    create_mosaic(video_path=dst_path, mosaic_path=MOSAIC_PATH)
+    create_mosaic(
+        video_path=str(dst_path), mosaic_path=MOSAIC_PATH, display_size=(640, 480)
+    )
