@@ -2,14 +2,49 @@ import cv2
 from pathlib import Path
 import numpy as np
 import subprocess
+import cv2.aruco
+
 
 MOSAIC_PATH = "mosaic.jpg"
 # SRC_PATH = Path("Data") / "my-own.mp4"
 SRC_PATH = Path("Data") / "ttk.mp4"
 VIDEO_WIDTH = 1280
 NUM_FRAMES = 200
-SKIP_FRAMES = 1
+SKIP_FRAMES = 2
 START_FRAME = 200
+
+
+def detect_new_aruco(frame, current_transform, detected_ids):
+    """
+    Detects ArUco markers in the current frame using the 4x4_1000 dictionary.
+    If a marker (with a new ID) is found, computes its center in the mosaic coordinate
+    system using the provided transformation matrix (current_transform), and returns
+    a tuple (True, (x, y)). Otherwise returns (False, None).
+
+    Parameters:
+      frame: the current frame (BGR image)
+      current_transform: the homography matrix (e.g. video_mosaic.H_old) at the current frame;
+         use the one that best represents the mapping of this frame into the mosaic coordinates.
+      detected_ids: a set containing marker IDs that have been seen in previous frames.
+    """
+    aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_1000)
+    parameters = cv2.aruco.DetectorParameters_create()
+    corners, ids, _ = cv2.aruco.detectMarkers(frame, aruco_dict, parameters=parameters)
+    if ids is not None:
+        # Loop over each detected marker
+        for i, marker_id in enumerate(ids.flatten()):
+            if marker_id not in detected_ids:
+                detected_ids.add(marker_id)
+                # Use the marker corners (shape: [1,4,2]) to compute a center.
+                marker_corners = corners[i][0]  # now shape (4, 2)
+                center = marker_corners.mean(axis=0)
+                # Convert center to homogeneous coordinates.
+                center_homog = np.array([center[0], center[1], 1.0])
+                # Transform it into the mosaic coordinate space.
+                mosaic_center = np.dot(current_transform, center_homog)
+                mosaic_center /= mosaic_center[2]  # normalize homogeneous coordinate
+                return True, (int(mosaic_center[0]), int(mosaic_center[1]))
+    return False, None
 
 
 def mp4_to_mjpeg(
@@ -24,6 +59,9 @@ def mp4_to_mjpeg(
     Converts an MP4 video to an MJPEG video by scaling, selecting frames,
     and re-timing the output. Frames are selected only if the frame number
     is at least start_frame and satisfies the skip_frames condition.
+
+    e.g.
+    ffmpeg -i Data\DJI_0001.MP4 -vf "scale=640:-2,select='not(mod(n,10))',setpts=N/(FRAME_RATE*TB)" -frames:v 200 -c:v mjpeg dest.mjpeg
 
     Parameters:
         src_path (str): Path to the source MP4 file.
@@ -306,8 +344,11 @@ def create_mosaic(video_path, mosaic_path, display_size=(640, 480)):
     cv2.namedWindow("output", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("output", display_size[0], display_size[1])
 
+    # variables to track new marker IDs and segment count
+    detected_ids = set()
+    segment_count = 0
+
     is_first_frame = True
-    # Remove the initial cap.read() call so processing starts immediately.
     while cap.isOpened():
         ret, frame_cur = cap.read()
         if not ret:
@@ -316,17 +357,34 @@ def create_mosaic(video_path, mosaic_path, display_size=(640, 480)):
         if is_first_frame:
             video_mosaic = VideoMosaic(frame_cur, detector_type="sift")
             is_first_frame = False
-            # Continue immediately to process subsequent frames.
             continue
 
         video_mosaic.process_frame(frame_cur)
+
+        # After processing the frame, check for new ArUco markers.
+        # We use video_mosaic.H_old (which holds the current accumulated transformation)
+        new_marker_found, mosaic_position = detect_new_aruco(
+            frame_cur, video_mosaic.H_old, detected_ids
+        )
+        if new_marker_found:
+            # Mark the location in the mosaic image (green circle)
+            cv2.circle(video_mosaic.output_img, mosaic_position, 10, (0, 255, 0), -1)
+            # Save the current mosaic segment
+            segment_filename = f"mosaic_segment_{segment_count}.jpg"
+            cv2.imwrite(segment_filename, video_mosaic.output_img)
+            print(f"Segment saved: {segment_filename}")
+            segment_count += 1
+
+            # Restart the mosaic using the current frame so the new segment begins here.
+            video_mosaic = VideoMosaic(frame_cur, detector_type="sift")
+
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     cap.release()
     cv2.destroyAllWindows()
     cv2.imwrite(mosaic_path, video_mosaic.output_img)
-    print(f"Mosaic saved to {mosaic_path}")
+    print(f"Final mosaic saved to {mosaic_path}")
 
 
 if __name__ == "__main__":
