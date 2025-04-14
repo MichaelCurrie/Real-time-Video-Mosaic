@@ -1,11 +1,72 @@
 import cv2
 from pathlib import Path
 import numpy as np
+import subprocess
 
-video_path = "Data/rotate.mjpeg"
+MOSAIC_PATH = "mosaic.jpg"
+SRC_PATH = Path("Data") / "my-own.mp4"
+VIDEO_WIDTH = 640
+NUM_FRAMES = 100
+SKIP_FRAMES = 5
+START_FRAME = 0
 
 
-class VideMosaic:
+def mp4_to_mjpeg(
+    src_path: str,
+    dst_path: str,
+    video_width: int,
+    num_frames: int,
+    skip_frames: int = 1,
+    start_frame: int = 0,
+):
+    """
+    Converts an MP4 video to an MJPEG video by scaling, selecting frames,
+    and re-timing the output. Frames are selected only if the frame number
+    is at least start_frame and satisfies the skip_frames condition.
+
+    Parameters:
+        src_path (str): Path to the source MP4 file.
+        dst_path (str): Destination path for the MJPEG output.
+        video_width (int): Width to scale the video (height is computed to keep aspect ratio).
+        num_frames (int): Number of output frames.
+        skip_frames (int): Process every nth frame (i.e. selects frames where mod(n, skip_frames) is 0).
+        start_frame (int): The frame number to start processing from.
+    """
+    assert Path(src_path).suffix == ".mp4"
+    assert Path(dst_path).suffix == ".mjpeg"
+
+    filter_chain = (
+        f"scale={video_width}:-2,"
+        f"select='gte(n,{start_frame})*not(mod(n,{skip_frames}))',"
+        "setpts=N/(FRAME_RATE*TB)"
+    )
+
+    ffmpeg_command = [
+        "ffmpeg",
+        "-i",
+        str(src_path),
+        "-vf",
+        filter_chain,
+        "-frames:v",
+        f"{num_frames}",
+        "-c:v",
+        "mjpeg",
+        str(dst_path),
+    ]
+
+    result = subprocess.run(ffmpeg_command, capture_output=True, text=True)
+
+    if result.returncode != 0:
+        print(
+            f"An error occurred while converting {src_path} mp4 -> mjpeg:\n{result.stderr}"
+        )
+    else:
+        print(
+            f"Success converting {src_path} mp4 -> mjpeg. Output saved to {dst_path}.\n{result.stdout}"
+        )
+
+
+class VideoMosaic:
     def __init__(
         self,
         first_image,
@@ -238,7 +299,8 @@ class VideMosaic:
         return image
 
 
-def main():
+def create_mosaic(video_path, mosaic_path):
+    print("Creating mosaic... press 0 to quit and save.")
     cap = cv2.VideoCapture(video_path)
     is_first_frame = True
     cap.read()
@@ -250,7 +312,7 @@ def main():
             break
 
         if is_first_frame:
-            video_mosaic = VideMosaic(frame_cur, detector_type="sift")
+            video_mosaic = VideoMosaic(frame_cur, detector_type="sift")
             is_first_frame = False
             continue
 
@@ -261,8 +323,19 @@ def main():
     cv2.waitKey(0)
     cap.release()
     cv2.destroyAllWindows()
-    cv2.imwrite("mosaic.jpg", video_mosaic.output_img)
+    cv2.imwrite(mosaic_path, video_mosaic.output_img)
+    print(f"Mosaic saved to {mosaic_path}")
 
 
 if __name__ == "__main__":
-    main()
+    dst_path = Path(SRC_PATH).parent / (Path(SRC_PATH).stem + ".mjpeg")
+
+    mp4_to_mjpeg(
+        src_path=SRC_PATH,
+        dst_path=dst_path,
+        video_width=VIDEO_WIDTH,
+        num_frames=NUM_FRAMES,
+        skip_frames=SKIP_FRAMES,
+    )
+
+    create_mosaic(video_path=dst_path, mosaic_path=MOSAIC_PATH)

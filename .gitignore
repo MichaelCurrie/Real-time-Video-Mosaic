@@ -27,3 +27,7 @@
 *.exe
 *.out
 *.app
+
+Data/*.mjpeg
+Data/*.mp4
+mosaic.jpg

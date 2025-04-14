@@ -17,11 +17,17 @@ There are both python3 and C++ code available. The C++ code has more features an
 <b>Python3:</b>
 - opencv verion 4.4.0 (No cuda needed)
 
-```
+```bash
   sudo apt-get install python3-opencv
   python main.py
 ``` 
 This code reads from a video and outputs an image, i.e.`mosaic.jpg`
+
+Note that the input file is `Data\rotate.mjpeg`, which is in a format that VLC doesn't normally play.  To convert to mp4, try this:
+
+```bash
+ffmpeg -i Data\rotate.mjpeg -vf "scale=500:374" -c:v libx264 output_file.mp4
+```
 
 ___________________________________________________
 
