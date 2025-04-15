@@ -9,8 +9,8 @@ MOSAIC_PATH = "mosaic.jpg"
 # SRC_PATH = Path("Data") / "my-own.mp4"
 SRC_PATH = Path("Data") / "ttk.mp4"
 VIDEO_WIDTH = 1280
-NUM_FRAMES = 200
-SKIP_FRAMES = 2
+NUM_FRAMES = 1000
+SKIP_FRAMES = 3
 START_FRAME = 200
 
 
