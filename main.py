@@ -27,8 +27,13 @@ def detect_new_aruco(frame, current_transform, detected_ids):
          use the one that best represents the mapping of this frame into the mosaic coordinates.
       detected_ids: a set containing marker IDs that have been seen in previous frames.
     """
-    aruco_dict = cv2.aruco.Dictionary_get(cv2.aruco.DICT_4X4_1000)
-    parameters = cv2.aruco.DetectorParameters_create()
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
+    parameters = cv2.aruco.DetectorParameters()
+    parameters.minDistanceToBorder = 5
+    parameters.adaptiveThreshWinSizeMax = 15
+    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+
+    detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
     corners, ids, _ = cv2.aruco.detectMarkers(frame, aruco_dict, parameters=parameters)
     if ids is not None:
         # Loop over each detected marker
