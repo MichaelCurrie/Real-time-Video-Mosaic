@@ -31,3 +31,6 @@
 Data/*.mjpeg
 Data/*.mp4
 mosaic*.jpg
+Mosaics/*
+Mosaics
+Data/test_aruco_img.png

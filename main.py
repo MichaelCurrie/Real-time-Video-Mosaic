@@ -10,7 +10,7 @@ import cv2.aruco
 
 
 CONVERT_VIDEO = False
-MOSAIC_PATH = ""
+MOSAIC_PATH = "Mosaics"
 # SRC_PATH = Path("Data") / "my-own.mp4"
 SRC_PATH = Path("Data") / "ttk.mp4"
 VIDEO_WIDTH = 1280
@@ -515,6 +515,7 @@ if __name__ == "__main__":
         )
 
     print("Creating mosaics")
+    os.makedirs(MOSAIC_PATH, exists_ok=True)
     create_mosaics(
         video_path=str(dst_path), mosaic_path=MOSAIC_PATH, display_size=(640, 480)
     )
