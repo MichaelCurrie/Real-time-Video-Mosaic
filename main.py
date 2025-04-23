@@ -1,5 +1,10 @@
 """
 Note: to play the resulting mjpeg, please use `vlc --demux ffmpeg ttk.mjpeg`
+
+TODO: anchor the first aruco to some pixel position and then put everything relative to that?
+
+TODO: ensure that the solver we are using can also handle affine transforms
+
 """
 
 import cv2
@@ -25,7 +30,7 @@ NUM_FRAMES = 1000
 SKIP_FRAMES = 3
 START_FRAME = 200
 
-MATCH_ARUCO_IF_POSSIBLE = True
+MATCH_ARUCO_IF_POSSIBLE = False
 
 
 class VideoMosaic:
@@ -33,7 +38,7 @@ class VideoMosaic:
         self,
         first_image,
         output_height_times=2,
-        output_width_times=4,
+        output_width_times=6,
         detector_type="sift",
     ):
         """
@@ -49,8 +54,11 @@ class VideoMosaic:
             detector_type (str, optional): the detector for feature detection. It can be "sift" or "orb". Defaults to "sift".
 
         """
-        self.common_tag_ids = {}
+        self.all_aruco_markers = {}
+        self.common_aruco_markers = {}
         self.prev_aruco_markers = {}
+        self.cur_aruco_markers = {}
+        self.mosaic_frame_index = 0
 
         self.detector_type = detector_type
         if detector_type == "sift":
@@ -63,7 +71,13 @@ class VideoMosaic:
         # Enable visualization for debugging.
         self.visualize = True
 
-        self.process_first_frame(first_image)
+        # Run the detection on the first image to get things going
+        self.frame_prev = first_image
+        frame_gray_prev = cv2.cvtColor(first_image, cv2.COLOR_BGR2GRAY)
+        self.kp_prev, self.des_prev = self.detector.detectAndCompute(
+            frame_gray_prev, None
+        )
+        self.prev_aruco_markers = detect_aruco_markers(first_image)
 
         self.output_img = np.zeros(
             shape=(
@@ -93,14 +107,6 @@ class VideoMosaic:
             cv2.namedWindow("matches", cv2.WINDOW_NORMAL)
             # Optionally, resize the matches window as desired.
             cv2.resizeWindow("matches", 640, 480)
-
-    def process_first_frame(self, first_image):
-        self.frame_prev = first_image
-        frame_gray_prev = cv2.cvtColor(first_image, cv2.COLOR_BGR2GRAY)
-        self.kp_prev, self.des_prev = self.detector.detectAndCompute(
-            frame_gray_prev, None
-        )
-        self.prev_aruco_markers = detect_aruco_markers(first_image)
 
     def match(self, des_cur, des_prev):
         """Matches the descriptors between the current and previous frames.
@@ -136,25 +142,26 @@ class VideoMosaic:
 
     def process_frame(self, frame_cur):
         self.frame_cur = frame_cur
-        frame_gray_cur = cv2.cvtColor(frame_cur, cv2.COLOR_BGR2GRAY)
-        # TODO: compute this only if no arcuo was detected (but we
-        # need it for the previous frame, so have to go back and calculate it..)
-        self.kp_cur, self.des_cur = self.detector.detectAndCompute(frame_gray_cur, None)
 
         # Detect markers in the current frame
-        cur_aruco_markers = detect_aruco_markers(self.frame_cur)
+        self.cur_aruco_markers = detect_aruco_markers(self.frame_cur)
+        self.all_aruco_markers = set(self.all_aruco_markers).union(
+            set(self.cur_aruco_markers)
+        )
         # Check if previous frame had markers and if there is a common marker
         if self.prev_aruco_markers:
-            self.common_tag_ids = set(self.prev_aruco_markers.keys()).intersection(
-                cur_aruco_markers.keys()
-            )
+            self.common_aruco_markers = set(
+                self.prev_aruco_markers.keys()
+            ).intersection(self.cur_aruco_markers.keys())
+        else:
+            self.common_aruco_markers = set()
 
-        if self.common_tag_ids:
+        if self.common_aruco_markers:
             # Take the first common marker to estimate the transformation
-            marker_id = list(self.common_tag_ids)[0]
+            marker_id = list(self.common_aruco_markers)[0]
             # Use the corners from the previous frame (source) and current frame (destination)
             src_pts = self.prev_aruco_markers[marker_id]  # from previous frame
-            dst_pts = cur_aruco_markers[marker_id]  # from current frame
+            dst_pts = self.cur_aruco_markers[marker_id]  # from current frame
             # TODO: I think these points need to be in the same order (maybe clockwise from upper left?) for findHomography to work
             pass
 
@@ -163,6 +170,10 @@ class VideoMosaic:
             H_aruco = None
 
         # Fallback: use feature matching-based homography.
+        # TODO: compute this only if no arcuo was detected (but we
+        # need it for the previous frame, so have to go back and calculate it..)
+        frame_gray_cur = cv2.cvtColor(frame_cur, cv2.COLOR_BGR2GRAY)
+        self.kp_cur, self.des_cur = self.detector.detectAndCompute(frame_gray_cur, None)
         self.matches = self.match(self.des_cur, self.des_prev)
         if len(self.matches) < 4:
             print(f"Feature matches {len(self.matches)} < 4 so cannot find homography")
@@ -171,10 +182,13 @@ class VideoMosaic:
             H_feature = self.findHomography(self.kp_cur, self.kp_prev, self.matches)
 
         if H_aruco is not None and MATCH_ARUCO_IF_POSSIBLE:
+            process_method = "aruco"
             H_conviction = H_aruco
         elif H_feature is not None:
+            process_method = "feature"
             H_conviction = H_feature
         else:
+            process_method = "error"
             print("No homography could be used for this frame")
             return
 
@@ -193,11 +207,15 @@ class VideoMosaic:
         self.warp(self.frame_cur, self.H)
 
         # Update the previous markers for the next iteration.
-        self.prev_aruco_markers = cur_aruco_markers
+        self.prev_aruco_markers = self.cur_aruco_markers
         self.H_old = self.H
         self.kp_prev = self.kp_cur
         self.des_prev = self.des_cur
         self.frame_prev = self.frame_cur
+        self.mosaic_frame_index += 1
+        print(
+            f"Processed mosaic frame #{self.mosaic_frame_index} using {process_method}; tags: {sorted(self.all_aruco_markers)}"
+        )
 
     @staticmethod
     def findHomography(image_1_kp, image_2_kp, matches):
@@ -334,7 +352,11 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
         # new_marker_found, mosaic_position = detect_new_aruco(
         #    frame_cur, video_mosaic.H_old, detected_ids
         # )
-        if len(video_mosaic.common_tag_ids) > 0:
+        # If we have a new aruco not common with previous ones
+        if (
+            len(video_mosaic.cur_aruco_markers) > 0
+            and len(video_mosaic.common_aruco_markers) == 0
+        ):
             # import code
             # code.interact(banner="tag1 figure out mosaic position", local=locals())
             # Mark the location in the mosaic image (green circle)

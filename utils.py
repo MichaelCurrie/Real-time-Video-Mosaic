@@ -80,6 +80,7 @@ def detect_new_aruco(frame, current_transform, detected_ids):
           detected_ids: a set containing marker IDs that have been seen in previous frames.
     def is_homography_distorted(frame, H, threshold_area_ratio=2.0, threshold_angle=30):
     """
+    raise AssertionError("OBSOLETE; bad.")
     aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
     parameters = cv2.aruco.DetectorParameters()
     parameters.minDistanceToBorder = 5
