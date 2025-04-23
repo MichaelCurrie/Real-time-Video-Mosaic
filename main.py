@@ -328,50 +328,41 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
     cv2.namedWindow("output", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("output", display_size[0], display_size[1])
 
-    # Variables to track new marker IDs and segment count
-    detected_ids = set()
+    # SEGMENT LOOP
     segment_count = 0
-
-    is_success, first_image = cap.read()
-    if not is_success:
-        print("BAD FRAME")
-        return
-
-    video_mosaic = VideoMosaic(first_image=first_image, detector_type="sift")
-
     while cap.isOpened():
-        is_success, frame_cur = cap.read()
+        is_success, first_frame = cap.read()
         if not is_success:
             print("BAD FRAME")
             break
 
-        is_done = video_mosaic.process_frame(frame_cur)
+        # Restart the mosaic using the current frame so the new segment begins here.
+        video_mosaic = VideoMosaic(first_frame, detector_type="sift")
 
-        # After processing the frame, check for new ArUco markers.
-        # We use video_mosaic.H_old (which holds the current accumulated transformation)
-        # new_marker_found, mosaic_position = detect_new_aruco(
-        #    frame_cur, video_mosaic.H_old, detected_ids
-        # )
-        # If we have a new aruco not common with previous ones
-        if (
-            len(video_mosaic.cur_aruco_markers) > 0
-            and len(video_mosaic.common_aruco_markers) == 0
-        ):
-            # import code
-            # code.interact(banner="tag1 figure out mosaic position", local=locals())
-            # Mark the location in the mosaic image (green circle)
-            # cv2.circle(video_mosaic.output_img, mosaic_position, 10, (0, 255, 0), -1)
-            # Save the current mosaic segment
-            segment_filename = Path(mosaic_path) / f"mosaic_segment_{segment_count}.jpg"
-            cv2.imwrite(segment_filename, video_mosaic.output_img)
-            print(f"Segment saved: {segment_filename}")
-            segment_count += 1
+        while True:
+            is_success, frame_cur = cap.read()
+            if not is_success:
+                print("BAD FRAME")
+                break
 
-            # Restart the mosaic using the current frame so the new segment begins here.
-            video_mosaic = VideoMosaic(frame_cur, detector_type="sift")
+            is_done = video_mosaic.process_frame(frame_cur)
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+            # If we have a new aruco not common with previous ones; write the segment
+            # and start again
+            if (
+                len(video_mosaic.cur_aruco_markers) > 0
+                and len(video_mosaic.common_aruco_markers) == 0
+            ):
+                break
+
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+        # Save the current mosaic segment
+        segment_filename = Path(mosaic_path) / f"mosaic_segment_{segment_count}.jpg"
+        cv2.imwrite(segment_filename, video_mosaic.output_img)
+        print(f"Segment saved: {segment_filename}")
+        segment_count += 1
 
     cap.release()
     cv2.destroyAllWindows()
