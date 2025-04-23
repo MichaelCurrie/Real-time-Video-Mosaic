@@ -34,3 +34,5 @@ mosaic*.jpg
 Mosaics/*
 Mosaics
 Data/test_aruco_img.png
+
+*.pyc
