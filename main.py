@@ -7,7 +7,14 @@ from pathlib import Path
 import numpy as np
 import subprocess
 import cv2.aruco
+import os
 
+from utils import (
+    is_homography_distorted,
+    # detect_new_aruco,
+    mp4_to_mjpeg,
+    detect_aruco_markers,
+)
 
 CONVERT_VIDEO = False
 MOSAIC_PATH = "Mosaics"
@@ -18,158 +25,7 @@ NUM_FRAMES = 1000
 SKIP_FRAMES = 3
 START_FRAME = 200
 
-MATCH_ARUCO_IF_POSSIBLE = False
-
-
-def detect_new_aruco(frame, current_transform, detected_ids):
-    """
-        Detects ArUco markers in the current frame using the 4x4_1000 dictionary.
-        If a marker (with a new ID) is found, computes its center in the mosaic coordinate
-        system using the provided transformation matrix (current_transform), and returns
-        a tuple (True, (x, y)). Otherwise returns (False, None).
-
-        Parameters:
-          frame: the current frame (BGR image)
-          current_transform: the homography matrix (e.g. video_mosaic.H_old) at the current frame;
-             use the one that best represents the mapping of this frame into the mosaic coordinates.
-          detected_ids: a set containing marker IDs that have been seen in previous frames.
-    def is_homography_distorted(frame, H, threshold_area_ratio=2.0, threshold_angle=30):
-    """
-    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-    parameters = cv2.aruco.DetectorParameters()
-    parameters.minDistanceToBorder = 5
-    parameters.adaptiveThreshWinSizeMax = 15
-    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-
-    detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-    corners, ids, _ = cv2.aruco.detectMarkers(frame, aruco_dict, parameters=parameters)
-    if ids is not None:
-        # Loop over each detected marker
-        for i, marker_id in enumerate(ids.flatten()):
-            if marker_id not in detected_ids:
-                detected_ids.add(marker_id)
-                # Use the marker corners (shape: [1,4,2]) to compute a center.
-                marker_corners = corners[i][0]  # now shape (4, 2)
-                center = marker_corners.mean(axis=0)
-                # Convert center to homogeneous coordinates.
-                center_homog = np.array([center[0], center[1], 1.0])
-                # Transform it into the mosaic coordinate space.
-                mosaic_center = np.dot(current_transform, center_homog)
-                mosaic_center /= mosaic_center[2]  # normalize homogeneous coordinate
-                return True, (int(mosaic_center[0]), int(mosaic_center[1]))
-    return False, None
-
-
-def is_homography_distorted(frame, H, threshold_area_ratio=2.0, threshold_angle=30):
-    """
-    Returns True if the homography causes a warped quadrilateral
-    whose area differs too much from the original, or its corner angles
-    deviate significantly from 90°.
-
-    Args:
-      frame: the current frame (assumed shape [h, w, 3])
-      H: the 3x3 homography matrix.
-      threshold_area_ratio: if the warped area is more than threshold_area_ratio times
-         or less than the original area, consider it distorted.
-      threshold_angle: if the average deviation from 90° (in degrees) is above this threshold.
-    """
-    h, w = frame.shape[:2]
-    # Define frame corners in homogeneous coordinates
-    corners = np.array([[0, 0], [w, 0], [w, h], [0, h]], dtype=np.float32).reshape(
-        -1, 1, 2
-    )
-    warped_corners = cv2.perspectiveTransform(corners, H).reshape(-1, 2)
-
-    # Compute bounding box area for the warped corners
-    min_xy = warped_corners.min(axis=0)
-    max_xy = warped_corners.max(axis=0)
-    warped_area = (max_xy[0] - min_xy[0]) * (max_xy[1] - min_xy[1])
-    orig_area = w * h
-    area_ratio = warped_area / orig_area
-
-    # Helper to compute angle at ptB given three points A, B, C.
-    def angle(ptA, ptB, ptC):
-        v1 = ptA - ptB
-        v2 = ptC - ptB
-        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
-        return np.degrees(np.arccos(np.clip(cos_angle, -1.0, 1.0)))
-
-    angles = []
-    for i in range(4):
-        a = warped_corners[i - 1]
-        b = warped_corners[i]
-        c = warped_corners[(i + 1) % 4]
-        angles.append(angle(a, b, c))
-    # Average absolute deviation from 90 degrees.
-    angle_deviation = np.mean([abs(a - 90) for a in angles])
-
-    # If the warped area deviates too much or the angle distortion is high, flag it.
-    if (
-        area_ratio > threshold_area_ratio
-        or area_ratio < 1.0 / threshold_area_ratio
-        or angle_deviation > threshold_angle
-    ):
-        return True
-    return False
-
-
-def mp4_to_mjpeg(
-    src_path: str,
-    dst_path: str,
-    video_width: int,
-    num_frames: int,
-    skip_frames: int = 1,
-    start_frame: int = 0,
-):
-    """
-    Converts an MP4 video to an MJPEG video by scaling, selecting frames,
-    and re-timing the output. Frames are selected only if the frame number
-    is at least start_frame and satisfies the skip_frames condition.
-
-    e.g.
-    ffmpeg -i Data\DJI_0001.MP4 -vf "scale=640:-2,select='not(mod(n,10))',setpts=N/(FRAME_RATE*TB)" -frames:v 200 -c:v mjpeg dest.mjpeg
-
-    Parameters:
-        src_path (str): Path to the source MP4 file.
-        dst_path (str): Destination path for the MJPEG output.
-        video_width (int): Width to scale the video (height is computed to keep aspect ratio).
-        num_frames (int): Number of output frames.
-        skip_frames (int): Process every nth frame (i.e. selects frames where mod(n, skip_frames) is 0).
-        start_frame (int): The frame number to start processing from.
-    """
-    assert Path(src_path).suffix == ".mp4"
-    assert Path(dst_path).suffix == ".mjpeg"
-
-    filter_chain = (
-        f"scale={video_width}:-2,"
-        f"select='gte(n,{start_frame})*not(mod(n,{skip_frames}))',"
-        "setpts=N/(FRAME_RATE*TB)"
-    )
-
-    ffmpeg_command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        str(src_path),
-        "-vf",
-        filter_chain,
-        "-frames:v",
-        f"{num_frames}",
-        "-c:v",
-        "mjpeg",
-        str(dst_path),
-    ]
-
-    result = subprocess.run(ffmpeg_command, capture_output=True, text=True)
-
-    if result.returncode != 0:
-        print(
-            f"An error occurred while converting {src_path} mp4 -> mjpeg:\n{result.stderr}"
-        )
-    else:
-        print(
-            f"Success converting {src_path} mp4 -> mjpeg. Output saved to {dst_path}.\n{result.stdout}"
-        )
+MATCH_ARUCO_IF_POSSIBLE = True
 
 
 class VideoMosaic:
@@ -193,12 +49,7 @@ class VideoMosaic:
             detector_type (str, optional): the detector for feature detection. It can be "sift" or "orb". Defaults to "sift".
 
         """
-        self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_1000)
-        self.aruco_parameters = cv2.aruco.DetectorParameters()
-        self.aruco_parameters.minDistanceToBorder = 5
-        self.aruco_parameters.adaptiveThreshWinSizeMax = 15
-        self.aruco_parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-
+        self.common_tag_ids = {}
         self.prev_aruco_markers = {}
 
         self.detector_type = detector_type
@@ -243,25 +94,13 @@ class VideoMosaic:
             # Optionally, resize the matches window as desired.
             cv2.resizeWindow("matches", 640, 480)
 
-    def detect_aruco_markers(self, frame):
-        # detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_parameters)
-        corners, ids, _ = cv2.aruco.detectMarkers(
-            frame, self.aruco_dict, parameters=self.aruco_parameters
-        )
-        markers = {}
-        if ids is not None:
-            for i, marker_id in enumerate(ids.flatten()):
-                # Each marker returns corners with shape (1,4,2); reshape to (4,2)
-                markers[int(marker_id)] = corners[i].reshape(4, 2)
-        return markers
-
     def process_first_frame(self, first_image):
         self.frame_prev = first_image
         frame_gray_prev = cv2.cvtColor(first_image, cv2.COLOR_BGR2GRAY)
         self.kp_prev, self.des_prev = self.detector.detectAndCompute(
             frame_gray_prev, None
         )
-        self.prev_aruco_markers = self.detect_aruco_markers(first_image)
+        self.prev_aruco_markers = detect_aruco_markers(first_image)
 
     def match(self, des_cur, des_prev):
         """Matches the descriptors between the current and previous frames.
@@ -298,48 +137,63 @@ class VideoMosaic:
     def process_frame(self, frame_cur):
         self.frame_cur = frame_cur
         frame_gray_cur = cv2.cvtColor(frame_cur, cv2.COLOR_BGR2GRAY)
+        # TODO: compute this only if no arcuo was detected (but we
+        # need it for the previous frame, so have to go back and calculate it..)
         self.kp_cur, self.des_cur = self.detector.detectAndCompute(frame_gray_cur, None)
 
-        common_ids = False
-
         # Detect markers in the current frame
-        cur_aruco_markers = self.detect_aruco_markers(self.frame_cur)
+        cur_aruco_markers = detect_aruco_markers(self.frame_cur)
         # Check if previous frame had markers and if there is a common marker
         if self.prev_aruco_markers:
-            common_ids = set(self.prev_aruco_markers.keys()).intersection(
+            self.common_tag_ids = set(self.prev_aruco_markers.keys()).intersection(
                 cur_aruco_markers.keys()
             )
-        # Update the previous markers for the next iteration.
-        self.prev_aruco_markers = cur_aruco_markers
 
-        if common_ids and MATCH_ARUCO_IF_POSSIBLE:
+        if self.common_tag_ids:
             # Take the first common marker to estimate the transformation
-            marker_id = list(common_ids)[0]
+            marker_id = list(self.common_tag_ids)[0]
             # Use the corners from the previous frame (source) and current frame (destination)
             src_pts = self.prev_aruco_markers[marker_id]  # from previous frame
             dst_pts = cur_aruco_markers[marker_id]  # from current frame
-            H_aruco, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC)
-            # Compose the new homography with the previous accumulated transform.
-            self.H = np.matmul(self.H_old, H_aruco)
-        else:
-            # Fallback: use feature matching-based homography.
-            self.matches = self.match(self.des_cur, self.des_prev)
-            if len(self.matches) < 4:
-                return
-            self.H = self.findHomography(self.kp_cur, self.kp_prev, self.matches)
-            if is_homography_distorted(self.frame_cur, self.H):
-                print("Distortion too high; restarting mosaic with current frame.")
-                # Optionally save the current mosaic segment before resetting
-                # e.g., cv2.imwrite(f"mosaic_segment_reset.jpg", self.output_img)
-                # Reinitialize with the current frame:
-                self.__init__(self.frame_cur, detector_type=self.detector_type)
-                return
+            # TODO: I think these points need to be in the same order (maybe clockwise from upper left?) for findHomography to work
+            pass
 
-            self.H = np.matmul(self.H_old, self.H)
+            H_aruco, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC)
+        else:
+            H_aruco = None
+
+        # Fallback: use feature matching-based homography.
+        self.matches = self.match(self.des_cur, self.des_prev)
+        if len(self.matches) < 4:
+            print(f"Feature matches {len(self.matches)} < 4 so cannot find homography")
+            H_feature = None
+        else:
+            H_feature = self.findHomography(self.kp_cur, self.kp_prev, self.matches)
+
+        if H_aruco is not None and MATCH_ARUCO_IF_POSSIBLE:
+            H_conviction = H_aruco
+        elif H_feature is not None:
+            H_conviction = H_feature
+        else:
+            print("No homography could be used for this frame")
+            return
+
+        # Compose the new homography with the previous accumulated transform.
+        self.H = np.matmul(self.H_old, H_conviction)
+
+        if False and is_homography_distorted(self.frame_cur, self.H):
+            print("Distortion too high; restarting mosaic with current frame.")
+            # Optionally save the current mosaic segment before resetting
+            # e.g., cv2.imwrite(f"mosaic_segment_reset.jpg", self.output_img)
+            # Reinitialize with the current frame:
+            self.__init__(self.frame_cur, detector_type=self.detector_type)
+            return
 
         # Warp the current frame into the mosaic using the determined homography.
         self.warp(self.frame_cur, self.H)
 
+        # Update the previous markers for the next iteration.
+        self.prev_aruco_markers = cur_aruco_markers
         self.H_old = self.H
         self.kp_prev = self.kp_cur
         self.des_prev = self.des_cur
@@ -477,12 +331,14 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
 
         # After processing the frame, check for new ArUco markers.
         # We use video_mosaic.H_old (which holds the current accumulated transformation)
-        new_marker_found, mosaic_position = detect_new_aruco(
-            frame_cur, video_mosaic.H_old, detected_ids
-        )
-        if new_marker_found:
+        # new_marker_found, mosaic_position = detect_new_aruco(
+        #    frame_cur, video_mosaic.H_old, detected_ids
+        # )
+        if len(video_mosaic.common_tag_ids) > 0:
+            # import code
+            # code.interact(banner="tag1 figure out mosaic position", local=locals())
             # Mark the location in the mosaic image (green circle)
-            cv2.circle(video_mosaic.output_img, mosaic_position, 10, (0, 255, 0), -1)
+            # cv2.circle(video_mosaic.output_img, mosaic_position, 10, (0, 255, 0), -1)
             # Save the current mosaic segment
             segment_filename = Path(mosaic_path) / f"mosaic_segment_{segment_count}.jpg"
             cv2.imwrite(segment_filename, video_mosaic.output_img)
@@ -515,7 +371,7 @@ if __name__ == "__main__":
         )
 
     print("Creating mosaics")
-    os.makedirs(MOSAIC_PATH, exists_ok=True)
+    os.makedirs(MOSAIC_PATH, exist_ok=True)
     create_mosaics(
         video_path=str(dst_path), mosaic_path=MOSAIC_PATH, display_size=(640, 480)
     )

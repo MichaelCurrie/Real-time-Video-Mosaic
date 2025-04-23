@@ -4,52 +4,11 @@ import cv2.aruco as aruco
 import numpy as np
 import time
 
+from utils import get_detector, refine_corners
+
 NUM_TRIALS = 100
 
 TEST_IMAGE = os.path.join("Data", "test_aruco_img.png")
-
-
-def get_aruco_dict_and_params():
-    # Create dictionary and detector parameters.
-    aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_1000)
-    # Create the detector instance. (Note: In later OpenCV versions you might use ArucoDetector.)
-    parameters = cv2.aruco.DetectorParameters()
-    parameters.minDistanceToBorder = 5
-    parameters.adaptiveThreshWinSizeMax = 15
-    parameters.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    return aruco_dict, parameters
-
-
-def get_detector():
-    aruco_dict, parameters = get_aruco_dict_and_params()
-
-    detector = cv2.aruco.ArucoDetector(aruco_dict, parameters)
-    return detector
-
-
-def get_centers(tag_ids, corners, image):
-    if tag_ids is None or len(tag_ids) == 0:
-        return None
-    num_ids = len(tag_ids)
-    tag_ids = list(tag_ids.reshape(num_ids))
-    # Generate subpixel information for the corners
-    stop_criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-    corners0 = np.vstack(corners).squeeze()
-    if corners0.shape == (4, 2):
-        # Single detections (n=1) are shape (4, 2).
-        # We need shape (1, 4, 2) to be consistent
-        corners0 = corners0.reshape(1, 4, 2)
-
-    # Now convert from shape (n, 4, 2) to (n*4, 1, 2)
-    corners00 = corners0.reshape(corners0.shape[0] * 4, 1, 2)
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    corners2 = cv2.cornerSubPix(gray, corners00, (5, 5), (-1, -1), stop_criteria)
-    corners2 = corners2.reshape(corners0.shape)
-
-    # This will be np.array of float of shape (n, 2)
-    centers = np.mean(corners2, axis=1)
-
-    return centers
 
 
 if __name__ == "__main__":
@@ -84,7 +43,10 @@ if __name__ == "__main__":
         intervals1.append(interval1)
 
         st = time.time()
-        centers = get_centers(tag_ids=tag_ids, corners=corners, image=test_image)
+        corners2 = refine_corners(tag_ids=tag_ids, corners=corners, image=test_image)
+        # This will be np.array of float of shape (n, 2)
+        centers = np.mean(corners2, axis=1)
+
         interval2 = time.time() - st
         intervals2.append(interval2)
 
