@@ -3,7 +3,9 @@ Note: to play the resulting mjpeg, please use `vlc --demux ffmpeg ttk.mjpeg`
 
 TODO: anchor the first aruco to some pixel position and then put everything relative to that?
 
-TODO: ensure that the solver we are using can also handle affine transforms
+TODO: ensure that the solver we are using can also handle affine transforms??
+
+TODO: try feature-matching to the original anchor picture or to the preeivous image if the distortion is high?
 
 """
 
@@ -50,7 +52,7 @@ class VideoMosaic:
         Args:
             first_image (image for the first frame): first image to initialize the output size
             output_height_times (int, optional): determines the output height based on input image height. Defaults to 2.
-            output_width_times (int, optional): determines the output width based on input image width. Defaults to 4.
+            output_width_times (int, optional): determines the output width based on input image width. Defaults to 6.
             detector_type (str, optional): the detector for feature detection. It can be "sift" or "orb". Defaults to "sift".
 
         """
@@ -62,7 +64,7 @@ class VideoMosaic:
 
         self.detector_type = detector_type
         if detector_type == "sift":
-            self.detector = cv2.SIFT_create(700)
+            self.detector = cv2.SIFT_create(1400)
             self.bf = cv2.BFMatcher()
         elif detector_type == "orb":
             self.detector = cv2.ORB_create(700)
@@ -107,38 +109,6 @@ class VideoMosaic:
             cv2.namedWindow("matches", cv2.WINDOW_NORMAL)
             # Optionally, resize the matches window as desired.
             cv2.resizeWindow("matches", 640, 480)
-
-    def match(self, des_cur, des_prev):
-        """Matches the descriptors between the current and previous frames.
-
-        Args:
-            des_cur (np array): current frame descriptor
-            des_prev (np arrau): previous frame descriptor
-
-        Returns:
-            array: and array of matches between descriptors
-        """
-
-        if self.detector_type == "sift":
-            pair_matches = self.bf.knnMatch(des_cur, des_prev, k=2)
-            matches = [m for m, n in pair_matches if m.distance < 0.7 * n.distance]
-        elif self.detector_type == "orb":
-            matches = self.bf.match(des_cur, des_prev)
-
-        matches = sorted(matches, key=lambda x: x.distance)
-        matches = matches[: min(len(matches), 20)]
-        if self.visualize:
-            match_img = cv2.drawMatches(
-                self.frame_cur,
-                self.kp_cur,
-                self.frame_prev,
-                self.kp_prev,
-                matches,
-                None,
-                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
-            )
-            cv2.imshow("matches", match_img)
-        return matches
 
     def process_frame(self, frame_cur):
         self.frame_cur = frame_cur
@@ -216,6 +186,38 @@ class VideoMosaic:
         print(
             f"Processed mosaic frame #{self.mosaic_frame_index} using {process_method}; tags: {sorted(self.all_aruco_markers)}"
         )
+
+    def match(self, des_cur, des_prev):
+        """Matches the descriptors between the current and previous frames.
+
+        Args:
+            des_cur (np array): current frame descriptor
+            des_prev (np arrau): previous frame descriptor
+
+        Returns:
+            array: and array of matches between descriptors
+        """
+
+        if self.detector_type == "sift":
+            pair_matches = self.bf.knnMatch(des_cur, des_prev, k=2)
+            matches = [m for m, n in pair_matches if m.distance < 0.7 * n.distance]
+        elif self.detector_type == "orb":
+            matches = self.bf.match(des_cur, des_prev)
+
+        matches = sorted(matches, key=lambda x: x.distance)
+        matches = matches[: min(len(matches), 20)]
+        if self.visualize:
+            match_img = cv2.drawMatches(
+                self.frame_cur,
+                self.kp_cur,
+                self.frame_prev,
+                self.kp_prev,
+                matches,
+                None,
+                flags=cv2.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS,
+            )
+            cv2.imshow("matches", match_img)
+        return matches
 
     @staticmethod
     def findHomography(image_1_kp, image_2_kp, matches):
@@ -359,14 +361,14 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
                 break
 
         # Save the current mosaic segment
-        segment_filename = Path(mosaic_path) / f"mosaic_segment_{segment_count}.jpg"
+        segment_filename = Path(mosaic_path) / f"mosaic_{segment_count}.jpg"
         cv2.imwrite(segment_filename, video_mosaic.output_img)
-        print(f"Segment saved: {segment_filename}")
+        print(f"Mosaic #{segment_count} saved: {segment_filename}")
         segment_count += 1
 
     cap.release()
     cv2.destroyAllWindows()
-    print(f"Final mosaic saved to {mosaic_path}")
+    print(f"Stopped reading video.")
 
 
 if __name__ == "__main__":
