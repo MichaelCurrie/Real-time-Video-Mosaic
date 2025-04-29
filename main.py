@@ -23,18 +23,24 @@ from utils import (
     detect_aruco_markers,
 )
 
-CONVERT_VIDEO = False
-MOSAIC_PATH = "Mosaics"
+# INPUT PATH
 # SRC_PATH = Path("Data") / "my-own.mp4"
-SRC_PATH = Path("Data") / "ttk.mp4"
+# SRC_PATH = Path("Data") / "ttk.mp4"
+SRC_PATH = Path("Data") / "bangkok.mp4"
+
+# VIDEO CONVERSION OPTIONS
+CONVERT_VIDEO = True
 VIDEO_WIDTH = 1280
-NUM_FRAMES = 1000
-SKIP_FRAMES = 3
-START_FRAME = 200
+NUM_FRAMES = 150
+SKIP_FRAMES = 2
+START_FRAME = 0
 
+# MATCHING OPTIONS
 MATCH_ARUCO_IF_POSSIBLE = False
-
 USE_ARUCO = False
+
+# OUTPUT PATH
+MOSAIC_PATH = "Mosaics"
 
 
 class VideoMosaic:
