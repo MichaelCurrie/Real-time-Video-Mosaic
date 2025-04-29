@@ -34,6 +34,8 @@ START_FRAME = 200
 
 MATCH_ARUCO_IF_POSSIBLE = False
 
+USE_ARUCO = False
+
 
 class VideoMosaic:
     def __init__(
@@ -79,7 +81,8 @@ class VideoMosaic:
         self.kp_prev, self.des_prev = self.detector.detectAndCompute(
             frame_gray_prev, None
         )
-        self.prev_aruco_markers = detect_aruco_markers(first_image)
+        if USE_ARUCO:
+            self.prev_aruco_markers = detect_aruco_markers(first_image)
 
         self.output_img = np.zeros(
             shape=(
@@ -114,7 +117,8 @@ class VideoMosaic:
         self.frame_cur = frame_cur
 
         # Detect markers in the current frame
-        self.cur_aruco_markers = detect_aruco_markers(self.frame_cur)
+        if USE_ARUCO:
+            self.cur_aruco_markers = detect_aruco_markers(self.frame_cur)
         self.all_aruco_markers = set(self.all_aruco_markers).union(
             set(self.cur_aruco_markers)
         )
