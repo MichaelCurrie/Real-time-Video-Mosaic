@@ -1,3 +1,14 @@
+"""
+Note: to play the resulting mjpeg, please use `vlc --demux ffmpeg ttk.mjpeg`
+
+TODO: anchor the first aruco to some pixel position and then put everything relative to that?
+
+TODO: ensure that the solver we are using can also handle affine transforms??
+
+TODO: try feature-matching to the original anchor picture or to the preeivous image if the distortion is high?
+
+"""
+
 import os
 from functools import partial
 from pathlib import Path
