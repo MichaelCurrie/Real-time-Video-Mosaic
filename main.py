@@ -9,27 +9,27 @@ TODO: try feature-matching to the original anchor picture or to the preeivous im
 
 """
 
-import cv2
-from pathlib import Path
-import numpy as np
-import subprocess
-import cv2.aruco
 import os
+from functools import partial
+from pathlib import Path
 
-from utils import (
-    is_homography_distorted,
-    # detect_new_aruco,
-    mp4_to_mjpeg,
-    detect_aruco_markers,
-)
+import cv2
+import cv2.aruco
+import numpy as np
+from utils import detect_aruco_markers  # detect_new_aruco,
+from utils import is_homography_distorted, mp4_to_mjpeg
 
 # INPUT PATH
 # SRC_PATH = Path("Data") / "my-own.mp4"
-# SRC_PATH = Path("Data") / "ttk.mp4"
-SRC_PATH = Path("Data") / "bangkok.mp4"
+SRC_PATH = Path("Data") / "ttk.mp4"
+# SRC_PATH = Path("Data") / "bangkok.mp4"
+# SRC_PATH = Path("Data") / "rotate.mjpeg"
+
+# DST_PATH = Path(SRC_PATH).parent / (Path(SRC_PATH).stem + ".mjpeg")
+DST_PATH = SRC_PATH
 
 # VIDEO CONVERSION OPTIONS
-CONVERT_VIDEO = True
+CONVERT_VIDEO = False
 VIDEO_WIDTH = 1280
 NUM_FRAMES = 150
 SKIP_FRAMES = 2
@@ -38,9 +38,28 @@ START_FRAME = 0
 # MATCHING OPTIONS
 MATCH_ARUCO_IF_POSSIBLE = False
 USE_ARUCO = False
+DETECTOR_TYPE = "orb"
 
 # OUTPUT PATH
 MOSAIC_PATH = "Mosaics"
+
+
+print("CUDA devices:", cv2.cuda.getCudaEnabledDeviceCount())
+if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+    USE_CUDA = True
+    cv2.cuda.printCudaDeviceInfo(0)
+    # No CUDA SIFT in pre-built wheels yet sadly
+    SIFT_create = cv2.SIFT_create
+    ORB_create = cv2.cuda.ORB_create
+    BFMatcher = partial(cv2.cuda.DescriptorMatcher_createBFMatcher, cv2.NORM_HAMMING)
+
+else:
+    USE_CUDA = False
+    print("No CUDA devices found — your build might not include the CUDA modules.")
+    SIFT_create = cv2.SIFT_create
+    ORB_create = cv2.ORB_create
+    # We pre-bake the function because the params differ slightly from the CUDA version
+    BFMatcher = partial(cv2.BFMatcher, cv2.NORM_HAMMING, crossCheck=True)
 
 
 class VideoMosaic:
@@ -49,7 +68,7 @@ class VideoMosaic:
         first_image,
         output_height_times=2,
         output_width_times=6,
-        detector_type="sift",
+        detector_type: str = "sift",
     ):
         """
         Initializes the mosaic creation. The first frame is used to set up
@@ -70,13 +89,34 @@ class VideoMosaic:
         self.cur_aruco_markers = {}
         self.mosaic_frame_index = 0
 
+        # in __init__(), replace CPU SIFT/orb with GPU-ORB:
         self.detector_type = detector_type
         if detector_type == "sift":
-            self.detector = cv2.SIFT_create(1400)
-            self.bf = cv2.BFMatcher()
+            self.detector = SIFT_create(1400)
+            self.bf = BFMatcher()
         elif detector_type == "orb":
-            self.detector = cv2.ORB_create(700)
-            self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+            # self.detector = ORB_create(700)
+            self.bf = BFMatcher()
+
+           if USE_CUDA:
+                # 1) upload
+                gpu_prev = cv2.cuda_GpuMat()
+                gpu_prev.upload(gray_prev)
+
+                # 2) async detect+compute
+                gpu_kp, gpu_des = ORB_create(700).detectAndComputeAsync(gpu_prev, None)
+
+                # 3) convert & download
+                self.kp_prev  = ORB_create(700).convert(gpu_kp)
+                self.des_prev = gpu_des.download()
+
+                # store the GPU detector for reuse
+                self.detector = ORB_create(700)
+            else:
+                # CPU fallback
+                self.detector = ORB_create(700)
+                self.kp_prev, self.des_prev = self.detector.detectAndCompute(gray_prev, None)
+
 
         # Enable visualization for debugging.
         self.visualize = True
@@ -143,7 +183,6 @@ class VideoMosaic:
             src_pts = self.prev_aruco_markers[marker_id]  # from previous frame
             dst_pts = self.cur_aruco_markers[marker_id]  # from current frame
             # TODO: I think these points need to be in the same order (maybe clockwise from upper left?) for findHomography to work
-            pass
 
             H_aruco, _ = cv2.findHomography(dst_pts, src_pts, cv2.RANSAC)
         else:
@@ -330,7 +369,9 @@ class VideoMosaic:
         return image
 
 
-def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
+def create_mosaics(
+    video_path, mosaic_path, detector_type: str, display_size=(640, 480)
+):
     assert Path(mosaic_path).is_dir()
 
     print("Creating mosaic... press 'q' to quit.")
@@ -349,7 +390,7 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
             break
 
         # Restart the mosaic using the current frame so the new segment begins here.
-        video_mosaic = VideoMosaic(first_frame, detector_type="sift")
+        video_mosaic = VideoMosaic(first_frame, detector_type=detector_type)
 
         while True:
             is_success, frame_cur = cap.read()
@@ -382,21 +423,23 @@ def create_mosaics(video_path, mosaic_path, display_size=(640, 480)):
 
 
 if __name__ == "__main__":
-    dst_path = Path(SRC_PATH).parent / (Path(SRC_PATH).stem + ".mjpeg")
 
-    print("Converting video")
     if CONVERT_VIDEO:
+        print(f"Converting video {SRC_PATH} -> {DST_PATH}")
         mp4_to_mjpeg(
             src_path=str(SRC_PATH),
-            dst_path=str(dst_path),
+            dst_path=str(DST_PATH),
             video_width=VIDEO_WIDTH,
             num_frames=NUM_FRAMES,
             skip_frames=SKIP_FRAMES,
             start_frame=START_FRAME,
         )
 
-    print("Creating mosaics")
+    print(f"Creating mosaics from {DST_PATH} -> {MOSAIC_PATH}")
     os.makedirs(MOSAIC_PATH, exist_ok=True)
     create_mosaics(
-        video_path=str(dst_path), mosaic_path=MOSAIC_PATH, display_size=(640, 480)
+        video_path=str(DST_PATH),
+        mosaic_path=MOSAIC_PATH,
+        display_size=(640, 480),
+        detector_type=DETECTOR_TYPE,
     )
