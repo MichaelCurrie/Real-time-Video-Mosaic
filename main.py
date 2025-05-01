@@ -9,9 +9,9 @@ import numpy as np
 from utils import detect_aruco_markers, mp4_to_mjpeg
 
 # INPUT PATH
-# SRC_PATH = Path("Data") / "ttk.mp4"
-SRC_PATH = Path("Data") / "zoom.mjpeg"
-DST_PATH = SRC_PATH
+# SRC_PATH = Path("Data") / "zoom.mjpeg"
+SRC_PATH = Path("Data") / "rotate.mjpeg"
+# DST_PATH = SRC_PATH
 
 # VIDEO CONVERSION OPTIONS
 CONVERT_VIDEO = False
@@ -23,7 +23,7 @@ START_FRAME = 0
 # MATCHING OPTIONS
 MATCH_ARUCO_IF_POSSIBLE = False
 USE_ARUCO = False
-DETECTOR_TYPE = "orb"
+DETECTOR_TYPE = "sift"
 
 # OUTPUT PATH
 MOSAIC_PATH = "Mosaics"
@@ -47,7 +47,19 @@ if USE_CUDA:
         cv2.cuda.printCudaDeviceInfo(0)
     # no cuda-sift in prebuilt wheels
     SIFT_create = cv2.SIFT_create
-    ORB_create = cv2.cuda.ORB_create
+    # ORB_create = cv2.cuda.ORB_create
+    ORB_create = partial(
+        cv2.cuda.ORB_create,
+        nfeatures=2000,
+        scaleFactor=1.2,
+        nlevels=8,
+        edgeThreshold=31,
+        firstLevel=0,
+        WTA_K=2,
+        scoreType=cv2.ORB_HARRIS_SCORE,
+        patchSize=31,
+        fastThreshold=20,
+    )
     BFMatcher = partial(cv2.cuda.DescriptorMatcher_createBFMatcher, cv2.NORM_HAMMING)
 else:
     print("No CUDA devices requested or found — falling back to CPU.")
@@ -84,7 +96,7 @@ class VideoMosaic:
             self.detector = SIFT_create(1400)
             self.bf = BFMatcher()
         elif self.detector_type == "orb":
-            self.detector = ORB_create(700)
+            self.detector = ORB_create(nfeatures=700)
             self.bf = BFMatcher()
         else:
             raise ValueError(f"Unknown detector: {detector_type}")
