@@ -9,8 +9,8 @@ import numpy as np
 from utils import detect_aruco_markers, mp4_to_mjpeg
 
 # INPUT PATH
-SRC_PATH = Path("Data") / "ttk.mp4"
-# SRC_PATH = Path("Data") / "zoom.mjpeg"
+# SRC_PATH = Path("Data") / "ttk.mp4"
+SRC_PATH = Path("Data") / "zoom.mjpeg"
 DST_PATH = SRC_PATH
 
 # VIDEO CONVERSION OPTIONS
@@ -218,6 +218,7 @@ class VideoMosaic:
             self.H_old,
             (self.output_img.shape[1], self.output_img.shape[0]),
             flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_TRANSPARENT,
         )
         mask = warped > 0
         self.output_img[mask] = warped[mask]
